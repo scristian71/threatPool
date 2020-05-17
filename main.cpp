@@ -1,9 +1,8 @@
 #include <iostream>
-//#include <chrono>
 
 #include "threat_pool.h"
 
-std::atomic<int> nr_primes = 0;
+static std::atomic<int> nr_primes = 0;
 
 void isPrime(unsigned int nr)
 {
@@ -31,9 +30,9 @@ int main(int argc, char* argv[])
     unsigned int q_count = 2;
     if (argc == 4)
     {
-        maxnr = atoi(argv[1]);
-        th_count = atoi(argv[2]);
-        q_count = atoi(argv[3]);
+        maxnr = static_cast<unsigned int>(atoi(argv[1]));
+        th_count = static_cast<unsigned int>(atoi(argv[2]));
+        q_count = static_cast<unsigned int>(atoi(argv[3]));
     }
     {
         thread_pool<> tp(th_count, q_count);

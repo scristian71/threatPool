@@ -575,56 +575,106 @@ private:
     mutable std::mutex m_cs;
 };
 
-template<typename T, typename S>
-class atomic_blocking_queue
+template<typename T,
+         unsigned long Q_SIZE = 4096ul>
+class atomic_blocking_queue_impl
 {
 public:
-    explicit atomic_blocking_queue(unsigned int size = 256 * 16)
+    static constexpr unsigned long Q_MASK = Q_SIZE - 1;
+
+    explicit atomic_blocking_queue_impl()
     :
-      m_size(size),
-      m_pushIndex(0), m_popIndex(0),
-      m_pushingIndex(0), m_popingIndex(0),
-      m_data((T*)operator new(size * sizeof(T))),
-      m_openSlots(size), m_fullSlots(0)
+      m_pushIndex(0),
+      m_popIndex(0),
+      m_pushingIndex(0),
+      m_popingIndex(0),
+      m_data(
+          reinterpret_cast<T*>(
+              ::operator new(sizeof(T) * Q_SIZE,
+                             std::align_val_t(4096))))
     {
-        if(!size)
+        if(!Q_SIZE)
             throw std::invalid_argument("Invalid queue size!");
     }
 
-    ~atomic_blocking_queue() noexcept
+    ~atomic_blocking_queue_impl() noexcept
     {
-        while (m_popIndex % m_size != m_pushIndex % m_size)
+        while (m_popIndex & Q_MASK != m_pushIndex & Q_MASK)
         {
-            m_data[m_popIndex % m_size].~T();
+            m_data[m_popIndex & Q_MASK].~T();
             m_popIndex++;
         }
-        operator delete(m_data);
+        ::operator delete(m_data);
     }
 
     template<typename Q = T>
-    typename std::enable_if<std::is_nothrow_copy_constructible<Q>::value, void>::type
-    push(const T& item) noexcept
+    typename std::enable_if<
+    std::is_nothrow_copy_constructible<Q>::value ||
+    std::is_nothrow_move_constructible<Q>::value, void>::type
+    push(T&& item) noexcept
     {
-        if (!m_openSlots.wait())
-        {
-            return;
-        }
+        const auto expected = m_pushingIndex.fetch_add(1);
 
-        auto expected = m_pushingIndex.fetch_add(1);
-
-        new (m_data + (expected % m_size)) T (item);
+        new (m_data + (expected & Q_MASK)) T (std::forward<T>(item));
 
         while (expected != m_pushIndex)
         {
             std::this_thread::yield();
         }
         m_pushIndex++;
-
-        m_fullSlots.post();
     }
 
     template<typename Q = T>
-    typename std::enable_if<std::is_nothrow_move_constructible<Q>::value, void>::type
+    typename std::enable_if<
+        std::is_nothrow_copy_assignable<Q>::value ||
+        std::is_nothrow_move_assignable<Q>::value, void>::type
+    pop(T& item) noexcept
+    {
+        const auto expected = m_popingIndex.fetch_add(1);
+
+        item = std::move(m_data[expected & Q_MASK]);
+        m_data[expected & Q_MASK].~T();
+
+        while (expected != m_popIndex)
+        {
+            std::this_thread::yield();
+        }
+        m_popIndex++;
+    }
+
+private:
+    alignas(64) volatile unsigned int m_pushIndex;
+    alignas(64) volatile unsigned int m_popIndex;
+
+    alignas(64) std::atomic_uint m_pushingIndex;
+    alignas(64) std::atomic_uint m_popingIndex;
+
+    T* m_data;
+};
+
+template<
+        typename T,
+        typename S,
+        unsigned long Q_SIZE = 4096ul,
+        template<typename TL, unsigned long Q_SIZEL> typename Q = atomic_blocking_queue_impl>
+class atomic_blocking_queue
+{
+public:
+    explicit atomic_blocking_queue()
+    :
+      m_openSlots(Q_SIZE),
+      m_fullSlots(0)
+    {
+        if(!Q_SIZE)
+            throw std::invalid_argument("Invalid queue size!");
+    }
+
+    ~atomic_blocking_queue() noexcept  {}
+
+    template<typename W = T>
+    typename std::enable_if<
+    std::is_nothrow_move_constructible<W>::value ||
+    std::is_nothrow_copy_constructible<W>::value, void>::type
     push(T&& item) noexcept
     {
         if (!m_openSlots.wait())
@@ -632,44 +682,15 @@ public:
             return;
         }
 
-        auto expected = m_pushingIndex.fetch_add(1);
-
-        new (m_data + (expected % m_size)) T (std::move(item));
-
-        while (expected != m_pushIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_pushIndex++;
+        queue_impl.push(std::forward<T>(item));
 
         m_fullSlots.post();
     }
 
-    template<typename Q = T>
-    typename std::enable_if<std::is_nothrow_copy_constructible<Q>::value, bool>::type
-    try_push(const T& item) noexcept
-    {
-        if(!m_openSlots.wait_for(std::chrono::seconds(0)))
-        {
-            return false;
-        }
-
-        auto expected = m_pushingIndex.fetch_add(1);
-
-        new (m_data + (expected % m_size)) T (item);
-
-        while (expected != m_pushIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_pushIndex++;
-
-        m_fullSlots.post();
-        return true;
-    }
-
-    template<typename Q = T>
-    typename std::enable_if<std::is_nothrow_move_constructible<Q>::value, bool>::type
+    template<typename W = T>
+    typename std::enable_if<
+    std::is_nothrow_move_constructible<W>::value ||
+    std::is_nothrow_copy_constructible<W>::value, bool>::type
     try_push(T&& item) noexcept
     {
         if(!m_openSlots.wait_for(std::chrono::seconds(0)))
@@ -677,24 +698,16 @@ public:
             return false;
         }
 
-        auto expected = m_pushingIndex.fetch_add(1);
-
-        new (m_data + (expected % m_size)) T (std::move(item));
-
-        while (expected != m_pushIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_pushIndex++;
+        queue_impl.push(std::forward<T>(item));
 
         m_fullSlots.post();
         return true;
     }
 
-    template<typename Q = T>
+    template<typename W = T>
     typename std::enable_if<
-        !std::is_move_assignable<Q>::value &&
-        std::is_nothrow_copy_assignable<Q>::value, bool>::type
+        std::is_nothrow_move_assignable<W>::value ||
+        std::is_nothrow_copy_assignable<W>::value, bool>::type
     pop(T& item) noexcept
     {
         if (!m_fullSlots.wait())
@@ -702,51 +715,16 @@ public:
             return false;
         }
 
-        auto expected = m_popingIndex.fetch_add(1);
-
-        item = m_data[expected % m_size];
-        m_data[expected % m_size].~T();
-
-        while (expected != m_popIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_popIndex++;
+        queue_impl.pop(item);
 
         m_openSlots.post();
         return true;
     }
 
-    template<typename Q = T>
+    template<typename W = T>
     typename std::enable_if<
-        std::is_move_assignable<Q>::value &&
-        std::is_nothrow_move_assignable<Q>::value, bool>::type
-    pop(T& item) noexcept
-    {
-        if (!m_fullSlots.wait())
-        {
-            return false;
-        }
-
-        auto expected = m_popingIndex.fetch_add(1);
-
-        item = std::move(m_data[expected % m_size]);
-        m_data[expected % m_size].~T();
-
-        while (expected != m_popIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_popIndex++;
-
-        m_openSlots.post();
-        return true;
-    }
-
-    template<typename Q = T>
-    typename std::enable_if<
-        !std::is_move_assignable<Q>::value &&
-        std::is_nothrow_copy_assignable<Q>::value, bool>::type
+        std::is_nothrow_move_assignable<W>::value ||
+        std::is_nothrow_copy_assignable<W>::value, bool>::type
     try_pop(T& item) noexcept
     {
         if(!m_fullSlots.wait_for(std::chrono::seconds(0)))
@@ -754,42 +732,7 @@ public:
             return false;
         }
 
-        auto expected = m_popingIndex.fetch_add(1);
-
-        item = m_data[expected % m_size];
-        m_data[expected % m_size].~T();
-
-        while (expected != m_popIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_popIndex++;
-
-        m_openSlots.post();
-        return true;
-    }
-
-    template<typename Q = T>
-    typename std::enable_if<
-        std::is_move_assignable<Q>::value &&
-        std::is_nothrow_move_assignable<Q>::value, bool>::type
-    try_pop(T& item) noexcept
-    {
-        if(!m_fullSlots.wait_for(std::chrono::seconds(0)))
-        {
-            return false;
-        }
-
-        auto expected = m_popingIndex.fetch_add(1);
-
-        item = std::move(m_data[expected % m_size]);
-        m_data[expected % m_size].~T();
-
-        while (expected != m_popIndex)
-        {
-            std::this_thread::yield();
-        }
-        m_popIndex++;
+        queue_impl.pop(item);
 
         m_openSlots.post();
         return true;
@@ -802,23 +745,13 @@ public:
         m_fullSlots.done();
     }
 
-    unsigned int capacity() const noexcept
-    {
-        return m_size;
-    }
-
 private:
-    const unsigned int m_size;
-    alignas(64) std::atomic_uint m_pushIndex;
-    alignas(64) std::atomic_uint m_popIndex;
 
-    alignas(64) std::atomic_uint m_pushingIndex;
-    alignas(64) std::atomic_uint m_popingIndex;
-
-    T* m_data;
+    Q<T, Q_SIZE> queue_impl;
 
     alignas(64) S m_openSlots;
     alignas(64) S m_fullSlots;
 
     bool m_done = false;
 };
+

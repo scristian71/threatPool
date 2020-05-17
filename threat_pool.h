@@ -11,8 +11,10 @@
 #include <functional>
 #include <type_traits>
 #include "queue.h"
+#include "queue2.h"
+#include <boost/lockfree/queue.hpp>
 
-template<template<typename, typename> typename Q=blocking_queue, typename S=semaphore>
+template<template<typename, typename> typename Q=blocking_queue, typename S=fast_semaphore>
 class simple_thread_pool
 {
 public:
@@ -131,7 +133,7 @@ public:
     template<typename F, typename... Args>
     void enqueue_work(F&& f, Args&&... args)
     {
-        auto work = [p = std::forward<F>(f), t = std::make_tuple(std::forward<Args>(args)...)]() { std::apply(p, t); };
+        Proc work = [p = std::forward<F>(f), t = std::make_tuple(std::forward<Args>(args)...)]() { std::apply(p, t); };
         auto i = m_index++;
 
         for(auto n = 0; n < m_count * K; ++n)
@@ -162,7 +164,6 @@ public:
     }
 
 private:
-    //using Queue = Q<Proc>;
     using Queue = Q<Proc, S>;
     using Queues = std::vector<Queue>;
     Queues m_queues;
