@@ -35,7 +35,13 @@ int main(int argc, char* argv[])
         q_count = static_cast<unsigned int>(atoi(argv[3]));
     }
     {
-        thread_pool<> tp(th_count, q_count);
+        thread_pool<
+                atomic_blocking_queue<
+                    std::function<void(void)>,
+                    LockFreeQueue<std::function<void(void)>,4>,fast_semaphore,4>> tp(th_count, q_count);
+
+        set_thr_id(0);
+
         for (unsigned int j = 0; j < maxnr; j++)
             for (unsigned int i = 3; i < 100; i++,i++)
             {

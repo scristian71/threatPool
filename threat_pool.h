@@ -12,7 +12,8 @@
 #include <type_traits>
 #include "queue.h"
 #include "queue2.h"
-#include <boost/lockfree/queue.hpp>
+
+using thread_pool_proc = std::function<void(void)>;
 
 template<template<typename, typename> typename Q=blocking_queue, typename S=fast_semaphore>
 class simple_thread_pool
@@ -76,13 +77,9 @@ private:
     Threads m_threads;
 };
 
-template<template<typename, typename> typename Q=atomic_blocking_queue, typename S=fast_semaphore>
-//template<template<typename> typename Q=blocking_queue>
+template<typename Q=atomic_blocking_queue<thread_pool_proc, fast_semaphore>>
 class thread_pool
 {
-private:
-    using Proc = std::function<void(void)>;
-
 public:
     explicit thread_pool(
             unsigned int threads = std::thread::hardware_concurrency(),
@@ -96,9 +93,10 @@ public:
 
         auto worker = [this](auto i)
         {
+            set_thr_id(i);
             while(true)
             {
-                Proc f;
+                thread_pool_proc f;
                 for(auto n = 0; n < m_count * K; ++n)
                 {
                     if(m_queues[(i + n) % m_count].try_pop(f))
@@ -133,7 +131,7 @@ public:
     template<typename F, typename... Args>
     void enqueue_work(F&& f, Args&&... args)
     {
-        Proc work = [p = std::forward<F>(f), t = std::make_tuple(std::forward<Args>(args)...)]() { std::apply(p, t); };
+        thread_pool_proc work = [p = std::forward<F>(f), t = std::make_tuple(std::forward<Args>(args)...)]() { std::apply(p, t); };
         auto i = m_index++;
 
         for(auto n = 0; n < m_count * K; ++n)
@@ -164,8 +162,7 @@ public:
     }
 
 private:
-    using Queue = Q<Proc, S>;
-    using Queues = std::vector<Queue>;
+    using Queues = std::vector<Q>;
     Queues m_queues;
 
     using Threads = std::vector<std::thread>;

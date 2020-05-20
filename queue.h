@@ -12,6 +12,7 @@
 #include <thread>
 #include <fstream>
 #include <string>
+#include <boost/lockfree/queue.hpp>
 
 template<typename T>
 class blocking_queue
@@ -654,9 +655,9 @@ private:
 
 template<
         typename T,
-        typename S,
-        unsigned long Q_SIZE = 4096ul,
-        template<typename TL, unsigned long Q_SIZEL> typename Q = atomic_blocking_queue_impl>
+        typename Q = atomic_blocking_queue_impl<T, 4096ul>,
+        typename S = fast_semaphore,
+        unsigned long Q_SIZE = 4096ul>
 class atomic_blocking_queue
 {
 public:
@@ -747,7 +748,7 @@ public:
 
 private:
 
-    Q<T, Q_SIZE> queue_impl;
+    Q queue_impl;
 
     alignas(64) S m_openSlots;
     alignas(64) S m_fullSlots;

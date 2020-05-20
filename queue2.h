@@ -59,7 +59,7 @@ private:
     };
 
 public:
-    LockFreeQueue(size_t n_producers, size_t n_consumers)
+    LockFreeQueue(size_t n_producers = 1, size_t n_consumers = 2)
         :
         n_producers_(n_producers),
         n_consumers_(n_consumers),
@@ -74,7 +74,6 @@ public:
                         sizeof(ThrPos) * n,
                         std::align_val_t(4096)));
 
-        assert(thr_p_);
         // Set per thread tail and head to ULONG_MAX.
         std::memset((void *)thr_p_, 0xFF, sizeof(ThrPos) * n);
 
@@ -82,8 +81,6 @@ public:
                         ::operator new(
                             sizeof(T) * Q_SIZE,
                             std::align_val_t(4096)));
-
-        assert(ptr_array_);
     }
 
     ~LockFreeQueue()
@@ -137,7 +134,7 @@ public:
                 const auto tmp_t = thr_p_[i].tail;
 
                 // Force compiler to use tmp_h exactly once.
-                asm volatile("" ::: "memory");
+                //asm volatile("" ::: "memory");
 
                 if (tmp_t < min)
                     min = tmp_t;
@@ -146,10 +143,11 @@ public:
 
             if (tp.head < last_tail_ + Q_SIZE)
                 break;
-            _mm_pause();
+            //_mm_pause();
+            std::this_thread::yield();
         }
 
-        new (ptr_array_[tp.head & Q_MASK]) T(std::forward<T>(t));
+        new (ptr_array_ + (tp.head & Q_MASK)) T (std::forward<T>(t));
 
         // Allow consumers eat the item.
         tp.head = ULONG_MAX;
@@ -158,8 +156,7 @@ public:
     void
     pop(T& t)
     {
-        assert(thr_id() < std::max(n_consumers_, n_producers_));
-        ThrPos& tp = thr_p_[thr_id()];
+        ThrPos& tp = thr_pos();
         /*
          * Request next place from which to pop.
          * See comments for push().
@@ -187,7 +184,7 @@ public:
                 auto tmp_h = thr_p_[i].head;
 
                 // Force compiler to use tmp_h exactly once.
-                asm volatile("" ::: "memory");
+                //asm volatile("" ::: "memory");
 
                 if (tmp_h < min)
                     min = tmp_h;
@@ -196,7 +193,8 @@ public:
 
             if (tp.tail < last_head_)
                 break;
-            _mm_pause();
+            //_mm_pause();
+            std::this_thread::yield();
         }
 
         t.swap(ptr_array_[tp.tail & Q_MASK]);
