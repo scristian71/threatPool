@@ -2,6 +2,14 @@
 
 #include "threat_pool.h"
 
+/*
+ * References:
+ *
+ * https://preshing.com/20120612/an-introduction-to-lock-free-programming/
+ * https://www.linuxjournal.com/content/lock-free-multi-producer-multi-consumer-queue-ring-buffer
+ * https://vorbrodt.blog/2019/02/27/advanced-thread-pool/
+ *
+ * */
 static std::atomic<int> nr_primes = 0;
 
 void isPrime(unsigned int nr)
