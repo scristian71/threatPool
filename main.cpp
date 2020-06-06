@@ -6,6 +6,7 @@
  * References:
  *
  * https://preshing.com/20120612/an-introduction-to-lock-free-programming/
+ * https://github.com/cameron314/concurrentqueue/blob/master/lightweightsemaphore.h
  * https://www.linuxjournal.com/content/lock-free-multi-producer-multi-consumer-queue-ring-buffer
  * https://vorbrodt.blog/2019/02/27/advanced-thread-pool/
  *
